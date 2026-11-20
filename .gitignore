@@ -1,0 +1,9 @@
+/archive/
+/build/
+/logs/
+/config/layout-camera/zones/
+/.idea/
+*.iml
+.env
+.env.*
+!.env.example

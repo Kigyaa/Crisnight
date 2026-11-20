@@ -1,0 +1,31 @@
+{
+  "required": true,
+  "package": "ru.layoutcamera.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "CameraMixin",
+    "KeyboardMixin",
+    "HudMixin",
+    "GameRendererMixin",
+    "KeyboardInputMixin",
+    "LocalPlayerMixin",
+    "MouseMixin",
+    "MinecraftMixin",
+    "LevelRendererMixin",
+    "ServerLevelMixin",
+    "StagePayloadMixin",
+    "StageEditPayloadMixin",
+    "StagePlanningPacketMixin",
+    "StageEditPacketMixin",
+    "CommandsMixin",
+    "ServerPlayerGameModeMixin",
+    "MultiPlayerGameModeMixin",
+    "ClientLevelMixin",
+    "LivingEntityMixin",
+    "MobMixin",
+    "EntityMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

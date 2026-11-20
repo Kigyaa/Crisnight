@@ -1,0 +1,53 @@
+{
+  "layoutcamera:planning_chicken": {
+    "model": "minecraft:chicken",
+    "summon_item": "minecraft:clay_ball",
+    "name": "Курица планировки",
+    "attack_speed": 0.0,
+    "attack_type": "none",
+    "damage": 0.0,
+    "defense": 0.0,
+    "mob_type": "passive",
+    "armor": 0.0,
+    "health": 4.0,
+    "can_move": false,
+    "can_place": true,
+    "placement_zone": "blue",
+    "faction": "peaceful",
+    "attack_block": 1
+  },
+  "layoutcamera:chicken_baz": {
+    "model": "minecraft:chicken",
+    "summon_item": "minecraft:clay_ball",
+    "name": "Баз Курица",
+    "attack_speed": 0.0,
+    "attack_type": "none",
+    "damage": 0.0,
+    "defense": 0.0,
+    "mob_type": "passive",
+    "armor": 0.0,
+    "health": 4.0,
+    "can_move": false,
+    "can_place": true,
+    "placement_zone": "blue",
+    "faction": "peaceful",
+    "attack_block": 1
+  },
+  "layoutcamera:chicken_bab": {
+    "model": "minecraft:chicken",
+    "summon_item": "minecraft:clay_ball",
+    "name": "Беб Курица",
+    "attack_speed": 0.0,
+    "attack_type": "none",
+    "damage": 0.0,
+    "defense": 0.0,
+    "mob_type": "passive",
+    "armor": 0.0,
+    "health": 4.0,
+    "can_move": false,
+    "can_place": true,
+    "placement_zone": "blue",
+    "faction": "peaceful",
+    "attack_block": 1
+  }
+}
