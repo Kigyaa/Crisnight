@@ -41,12 +41,23 @@ final class AttackBlocks {
         return attackers != null && attackers.stream().anyMatch(reference -> reference.get() == attacker);
     }
 
+    static synchronized void release(Mob defender, Mob attacker) {
+        var attackers = held.get(defender);
+        if (attackers != null) {
+            attackers.removeIf(reference -> reference.get() == attacker);
+            if (attackers.isEmpty()) {
+                held.remove(defender);
+            }
+        }
+    }
+
     private static List<WeakReference<Mob>> liveAttackers(Mob defender) {
         var attackers = held.get(defender);
         if (attackers != null) {
             attackers.removeIf(reference -> {
                 Mob attacker = reference.get();
-                return attacker == null || !attacker.isAlive() || attacker.level() != defender.level();
+                return attacker == null || !attacker.isAlive() || attacker.level() != defender.level()
+                    || !FactionCombat.canAttackAtHeight(attacker, defender);
             });
             if (attackers.isEmpty()) {
                 held.remove(defender);

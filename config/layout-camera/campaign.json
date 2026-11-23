@@ -1,0 +1,12 @@
+{
+  "levels": [
+    {
+      "stage": "stage_1",
+      "title": "Уровень 1"
+    },
+    {
+      "stage": "stage_2",
+      "title": "Уровень 2"
+    }
+  ]
+}

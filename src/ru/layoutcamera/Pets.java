@@ -121,6 +121,10 @@ public final class Pets {
         mob.addTag(PET_ID + "=" + pet.id());
     }
 
+    static boolean isConfigured(Mob mob) {
+        return mob.entityTags().stream().anyMatch(tag -> tag.startsWith(PET_ID + "="));
+    }
+
     static void configureMob(Mob mob, PetConfig pet) {
         if (pet.values().has("name")) {
             mob.setCustomName(Component.literal(pet.text("name", "")));

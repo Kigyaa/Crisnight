@@ -11,7 +11,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -49,16 +48,17 @@ public final class PlanningMobs {
     private static UUID displayedStage;
     private static final List<PlacedMob> removedPreviews = new ArrayList<>();
     private static volatile PlacedMob selected;
+    private static Map<PlacementPoint, ActiveDefender> activeDefenders = Map.of();
 
     private PlanningMobs() {}
 
     public static void tick(Minecraft minecraft) {
-        var activeDefenders = minecraft.level == null ? Set.<PlacementPoint>of()
+        var defenders = minecraft.level == null ? Map.<PlacementPoint, ActiveDefender>of()
             : SpawnZones.activeDefenders(minecraft.getSingleplayerServer(), minecraft.level.dimension());
-        tick(minecraft, activeDefenders);
+        tick(minecraft, defenders);
     }
 
-    private static synchronized void tick(Minecraft minecraft, Set<PlacementPoint> activeDefenders) {
+    private static synchronized void tick(Minecraft minecraft, Map<PlacementPoint, ActiveDefender> defenders) {
         if (minecraft.level == null) {
             reset();
             return;
@@ -85,10 +85,14 @@ public final class PlanningMobs {
         removedPreviews.forEach(PlanningMobs::removePreview);
         removedPreviews.clear();
         updateStagePreviews(minecraft);
+        activeDefenders = defenders;
         for (PlacedMob placement : mobs) {
-            if (!ZoneSelection.displaysPlacement(level, placement.scope)
-                || activeDefenders.contains(new PlacementPoint(placement.scope, placement.center))) {
+            if (!ZoneSelection.displaysPlacement(level, placement.scope)) {
                 removePreview(placement);
+                continue;
+            }
+            if (activeDefender(placement) != null) {
+                discardPreview(placement);
                 continue;
             }
             if (!placement.unavailable && (placement.entity == null || placement.entity.isRemoved())
@@ -200,6 +204,8 @@ public final class PlanningMobs {
 
     record PlacementPoint(UUID scope, Vec3 center) {}
 
+    record ActiveDefender(int entityId, AttackGrid attackGrid) {}
+
     record DefenderPlacement(Identifier id, Vec3 center, float yaw, ZoneSelection.ZoneColor zone, UUID scope, Path file,
                              boolean temporary) {
         boolean matches(PlacedMob mob) {
@@ -265,6 +271,7 @@ public final class PlanningMobs {
         mobs = List.of();
         removedPreviews.clear();
         selected = null;
+        activeDefenders = Map.of();
         loadFailed = false;
     }
 
@@ -299,6 +306,37 @@ public final class PlanningMobs {
             return id.equals(PetConfig.PLANNING_CHICKEN) ? ZoneSelection.ZoneColor.BLUE : null;
         }
         return pet.canPlace() ? pet.placementZone() : null;
+    }
+
+    static AttackGrid previewAttackGrid(Minecraft minecraft, Identifier id) {
+        Map<Identifier, PetConfig> remote = StagePlanning.clientPets(minecraft);
+        PetConfig pet = (remote == null ? definitions : remote).get(id);
+        return pet == null ? null : pet.attackGrid();
+    }
+
+    public static void drawSelectedAttackGrid(Minecraft minecraft) {
+        PlacedMob placement = selected;
+        if (placement != null && !PlanningDrag.active() && LayoutCamera.isActive(minecraft)
+            && minecraft.level == level && minecraft.gui.screen() == null && minecraft.gui.overlay() == null) {
+            var active = activeDefender(placement);
+            var entity = editableMob(placement);
+            var grid = active == null ? placement.attackGrid : active.attackGrid();
+            if (entity != null && grid != null) {
+                ZoneSelection.drawAttackGrid(grid, entity.position(), entity.getYRot());
+            }
+        }
+    }
+
+    private static ActiveDefender activeDefender(PlacedMob placement) {
+        return activeDefenders.get(new PlacementPoint(placement.scope, placement.center));
+    }
+
+    private static Mob editableMob(PlacedMob placement) {
+        var active = activeDefender(placement);
+        ClientLevel clientLevel = level;
+        Entity entity = active == null ? placement.entity
+            : clientLevel == null ? null : clientLevel.getEntity(active.entityId());
+        return entity instanceof Mob mob && mob.isAlive() ? mob : null;
     }
 
     public static void place(Minecraft minecraft, ZoneSelection.MobPlacement target, Identifier id) {
@@ -339,6 +377,10 @@ public final class PlanningMobs {
     }
 
     public static void selectAtCursor(Minecraft minecraft) {
+        if (PlanningDrag.active()) {
+            return;
+        }
+        PlacedMob previous = selected;
         selected = null;
         if (LayoutCamera.isOverHint(minecraft) || LayoutCamera.hotbarSlotAtCursor(minecraft) >= 0) {
             return;
@@ -348,11 +390,12 @@ public final class PlanningMobs {
         double closest = Double.POSITIVE_INFINITY;
         PlacedMob hit = null;
         for (PlacedMob placement : mobs) {
-            Mob entity = placement.entity;
-            if (entity == null || entity.isRemoved()) {
+            Mob entity = editableMob(placement);
+            if (entity == null) {
                 continue;
             }
-            Vec3 end = origin.add(ray.direction().scale(origin.distanceTo(placement.center) + 2));
+            Vec3 end = origin.add(ray.direction().scale(origin.distanceTo(entity.position())
+                + Math.max(entity.getBbHeight(), entity.getBbWidth()) + 2));
             var intersection = entity.getBoundingBox().inflate(0.08).clip(origin, end);
             if (intersection.isPresent()) {
                 double distance = origin.distanceTo(intersection.get());
@@ -362,9 +405,20 @@ public final class PlanningMobs {
                 }
             }
         }
-        if (hit != null) {
+        if (hit != null && hit != previous) {
             Vec3 end = origin.add(ray.direction().scale(Math.max(0, closest - 0.001)));
             if (ZoneSelection.clipBlocks(minecraft, origin, end).getType() == HitResult.Type.MISS) {
+                var active = activeDefender(hit);
+                if (active != null) {
+                    hit.attackGrid = active.attackGrid();
+                } else {
+                    try {
+                        allowedZone(hit.id);
+                        hit.attackGrid = previewAttackGrid(minecraft, hit.id);
+                    } catch (IOException exception) {
+                        LogUtils.getLogger().warn("Could not refresh the attack grid for {}", hit.id, exception);
+                    }
+                }
                 selected = hit;
             }
         }
@@ -385,6 +439,18 @@ public final class PlanningMobs {
         List<PlacedMob> updated = new ArrayList<>(mobs);
         updated.remove(placement);
         if (save(minecraft, updated, placement)) {
+            var active = activeDefender(placement);
+            var integrated = minecraft.getSingleplayerServer();
+            if (active != null && integrated != null) {
+                var dimension = minecraft.level.dimension();
+                var point = new PlacementPoint(placement.scope, placement.center);
+                integrated.execute(() -> {
+                    var serverLevel = integrated.getLevel(dimension);
+                    if (serverLevel != null) {
+                        SpawnZones.removeActiveDefender(serverLevel, point, active.entityId());
+                    }
+                });
+            }
             removePreview(placement);
         }
         return true;
@@ -394,6 +460,10 @@ public final class PlanningMobs {
         if (placement == selected) {
             selected = null;
         }
+        discardPreview(placement);
+    }
+
+    private static void discardPreview(PlacedMob placement) {
         Mob entity = placement.entity;
         if (entity != null && !entity.isRemoved()) {
             level.removeEntity(entity.getId(), Entity.RemovalReason.DISCARDED);
@@ -440,11 +510,15 @@ public final class PlanningMobs {
     }
 
     private static Button button(Minecraft minecraft, PlacedMob placement, int width, int height) {
-        if (placement == null || placement.entity == null || minecraft.level != level || !LayoutCamera.isActive(minecraft)) {
+        if (placement == null || minecraft.level != level || !LayoutCamera.isActive(minecraft)) {
+            return null;
+        }
+        var entity = editableMob(placement);
+        if (entity == null) {
             return null;
         }
         var camera = minecraft.gameRenderer.mainCamera();
-        Vec3 offset = placement.center.add(0, placement.entity.getBbHeight() * 0.8, 0).subtract(camera.position());
+        Vec3 offset = entity.position().add(0, entity.getBbHeight() * 0.8, 0).subtract(camera.position());
         if (offset.dot(new Vec3(camera.forwardVector())) <= 0) {
             return null;
         }
@@ -594,6 +668,7 @@ public final class PlanningMobs {
         private final UUID scope;
         private final boolean temporary;
         private Mob entity;
+        private AttackGrid attackGrid;
         private boolean unavailable;
 
         PlacedMob(Vec3 center, float yaw, Identifier id, ZoneSelection.ZoneColor zone, UUID scope, boolean temporary) {

@@ -23,9 +23,22 @@ public final class LayoutCommands {
         dispatcher.register(Commands.literal("givetool")
             .requires(LayoutCommands::isWorldOwner)
             .executes(context -> giveTool(context.getSource())));
+        dispatcher.register(Commands.literal("giveroutetool")
+            .requires(LayoutCommands::isWorldOwner)
+            .executes(context -> {
+                var source = context.getSource();
+                ItemStack tool = new ItemStack(Items.STICK);
+                tool.set(DataComponents.CUSTOM_NAME, Component.literal(ZoneSelection.ROUTE_TOOL_NAME));
+                giveItem(source.getPlayer(), tool);
+                source.sendSuccess(() -> Component.literal("Маршрут · ЛКМ добавляет точку, ПКМ отменяет последнюю."), false);
+                return 1;
+            }));
         dispatcher.register(Commands.literal("startspawn")
             .requires(LayoutCommands::isWorldOwner)
             .executes(context -> SpawnZones.start(context.getSource())));
+        dispatcher.register(Commands.literal("createlevelnpc")
+            .requires(LayoutCommands::isWorldOwner)
+            .executes(context -> CampaignNpc.create(context.getSource())));
         dispatcher.register(Commands.literal("createstage")
             .requires(LayoutCommands::canUseStageCopies)
             .then(Commands.argument("name", StringArgumentType.word())
@@ -53,6 +66,10 @@ public final class LayoutCommands {
             .then(Commands.literal("zones").then(Commands.argument("name", StringArgumentType.word())
                 .executes(context -> onHost(context.getSource(), minecraft ->
                     ZoneSelection.listZones(minecraft, StringArgumentType.getString(context, "name"))))))
+            .then(Commands.literal("routeclear").then(Commands.argument("name", StringArgumentType.word())
+                .then(Commands.argument("zone", StringArgumentType.word())
+                    .executes(context -> onHost(context.getSource(), minecraft -> ZoneSelection.clearRoute(minecraft,
+                        StringArgumentType.getString(context, "name"), StringArgumentType.getString(context, "zone")))))))
             .then(Commands.literal("zone").then(Commands.argument("name", StringArgumentType.word())
                 .then(Commands.argument("zone", StringArgumentType.word())
                     .then(Commands.argument("settings", StringArgumentType.greedyString())

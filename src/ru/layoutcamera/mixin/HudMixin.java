@@ -11,6 +11,7 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import ru.layoutcamera.Campaign;
 import ru.layoutcamera.LayoutCamera;
 import ru.layoutcamera.PlanningDrag;
 import ru.layoutcamera.PlanningMobs;
@@ -61,6 +62,7 @@ abstract class HudMixin {
         boolean active = LayoutCamera.isActive(minecraft);
 
         graphics.nextStratum();
+        Campaign.drawHud(minecraft, graphics);
         graphics.fill(left, top, right, bottom,
             active && LayoutCamera.isOverHint(minecraft) ? 0xee36323a : 0xd91a1c20);
         graphics.fill(key, keyTop, key + 15, keyTop + 13, active ? 0xffe3ae58 : 0xffbabfc7);

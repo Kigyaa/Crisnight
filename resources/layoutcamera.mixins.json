@@ -9,9 +9,13 @@
     "GameRendererMixin",
     "KeyboardInputMixin",
     "LocalPlayerMixin",
+    "PlayerMixin",
+    "ParticleAccessor",
     "MouseMixin",
     "MinecraftMixin",
     "LevelRendererMixin",
+    "EntityRenderStateMixin",
+    "EntityRenderDispatcherMixin",
     "ServerLevelMixin",
     "StagePayloadMixin",
     "StageEditPayloadMixin",
@@ -23,6 +27,7 @@
     "ClientLevelMixin",
     "LivingEntityMixin",
     "MobMixin",
+    "ProjectileMixin",
     "EntityMixin"
   ],
   "injectors": {

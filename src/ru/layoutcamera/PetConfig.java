@@ -49,7 +49,7 @@ record PetConfig(Identifier id, Identifier model, Identifier summonItem, JsonObj
                 PetConfig definition = new PetConfig(id, identifier(values, "model", null),
                     identifier(values, "summon_item", "minecraft:clay_ball"), values);
                 definition.text("name", "");
-                definition.text("attack_type", "");
+                definition.projectile();
                 definition.text("mob_type", "");
                 definition.canMove();
                 definition.movementSpeed();
@@ -57,6 +57,8 @@ record PetConfig(Identifier id, Identifier model, Identifier summonItem, JsonObj
                 definition.placementZone();
                 definition.faction();
                 definition.attackZones();
+                definition.attackGrid();
+                definition.attackKnockback();
                 definition.attackBlock();
                 definition.number("attack_speed", 0);
                 definition.number("damage", 0);
@@ -139,6 +141,28 @@ record PetConfig(Identifier id, Identifier model, Identifier summonItem, JsonObj
         return AttackZones.read(values.get("attack_zones"));
     }
 
+    AttackGrid attackGrid() {
+        try {
+            return AttackGrid.read(values.get("attack_grid"));
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException(id + " · " + exception.getMessage(), exception);
+        }
+    }
+
+    ProjectileAttack.Ammo projectile() {
+        if (!"ranged".equals(text("attack_type", ""))) {
+            if (values.has("projectile")) {
+                throw new IllegalArgumentException(id + " · projectile используется с attack_type: ranged.");
+            }
+            return null;
+        }
+        try {
+            return ProjectileAttack.Ammo.valueOf(text("projectile", "arrow").toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException(id + " · projectile должен быть arrow, snowball или egg.", exception);
+        }
+    }
+
     int attackBlock() {
         var value = values.get("attack_block");
         if (value == null) {
@@ -155,6 +179,20 @@ record PetConfig(Identifier id, Identifier model, Identifier summonItem, JsonObj
             }
         }
         throw new IllegalArgumentException(id + ": attack_block must be a non-negative integer");
+    }
+
+    double attackKnockback() {
+        var value = values.get("attack_knockback");
+        if (value == null) {
+            return 0;
+        }
+        if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) {
+            double strength = value.getAsDouble();
+            if (AttackKnockback.valid(strength)) {
+                return strength;
+            }
+        }
+        throw new IllegalArgumentException(id + " · attack_knockback должен быть числом от 0 до 5.");
     }
 
     ZoneSelection.ZoneColor placementZone() {
@@ -209,6 +247,7 @@ record PetConfig(Identifier id, Identifier model, Identifier summonItem, JsonObj
         values.addProperty("can_place", true);
         values.addProperty("faction", "peaceful");
         values.addProperty("attack_block", 1);
+        values.addProperty("attack_knockback", 0);
         values.addProperty("placement_zone", "blue");
         values.addProperty("name", legacy.name());
         values.addProperty("attack_speed", legacy.attackSpeed());

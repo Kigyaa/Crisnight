@@ -44,7 +44,7 @@ public final class PlanningDrag {
                 return;
             }
             previewYaw = LayoutCamera.yaw() + 180.0f;
-            mob = new DraggedMob(id, allowed, slot, model);
+            mob = new DraggedMob(id, allowed, slot, model, PlanningMobs.previewAttackGrid(minecraft, id));
         } catch (IOException exception) {
             minecraft.player.sendOverlayMessage(Component.literal("Не удалось прочитать mobs.json: " + exception.getMessage()));
             return;
@@ -74,6 +74,7 @@ public final class PlanningDrag {
 
     public static void release(Minecraft minecraft) {
         DraggedMob dragged = mob;
+        PlanningMobs.hideDeleteButton();
         if (origin == minecraft.level && LayoutCamera.isActive(minecraft) && dragged != null) {
             ZoneSelection.MobPlacement target = ZoneSelection.mobPlacement(minecraft, dragged.zone(), dragged.id());
             if (target != null) {
@@ -139,6 +140,9 @@ public final class PlanningDrag {
         }
         ZoneSelection.MobPlacement target = ZoneSelection.mobPlacement(minecraft, dragged.zone(), dragged.id());
         if (target != null) {
+            if (dragged.attackGrid() != null) {
+                ZoneSelection.drawAttackGrid(dragged.attackGrid(), target.center(), target.yaw());
+            }
             Vec3 direction = Vec3.directionFromRotation(0, target.yaw());
             Vec3 side = new Vec3(-direction.z, 0, direction.x);
             Vec3 center = target.center().add(0, 0.015, 0);
@@ -162,6 +166,6 @@ public final class PlanningDrag {
         }
     }
 
-    private record DraggedMob(Identifier id, ZoneSelection.ZoneColor zone, int slot, Mob model) {}
+    private record DraggedMob(Identifier id, ZoneSelection.ZoneColor zone, int slot, Mob model, AttackGrid attackGrid) {}
 
 }

@@ -45,6 +45,12 @@ abstract class MouseMixin {
             return;
         }
         boolean layout = LayoutCamera.isActive(minecraft);
+        if (!layout && minecraft.mouseHandler.isMouseGrabbed() && ZoneSelection.isHoldingRouteTool(minecraft)
+            && (button.button() == InputConstants.MOUSE_BUTTON_LEFT || button.button() == InputConstants.MOUSE_BUTTON_RIGHT)) {
+            ZoneSelection.editRoute(minecraft, button.button() == InputConstants.MOUSE_BUTTON_LEFT);
+            callback.cancel();
+            return;
+        }
         if (layout && !minecraft.gui.hud.isHidden()) {
             if (button.button() == InputConstants.MOUSE_BUTTON_RIGHT) {
                 PlanningMobs.selectAtCursor(minecraft);

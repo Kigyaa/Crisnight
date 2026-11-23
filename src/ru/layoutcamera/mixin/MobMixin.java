@@ -13,6 +13,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import ru.layoutcamera.FinishRouteGoal;
 import ru.layoutcamera.FactionCombat;
+import ru.layoutcamera.ProjectileAttack;
 
 @Mixin(Mob.class)
 abstract class MobMixin {
@@ -37,14 +38,29 @@ abstract class MobMixin {
 
     @Inject(method = "canAttack", at = @At("HEAD"), cancellable = true)
     private void layoutcamera$filterTargetsByZone(LivingEntity target, CallbackInfoReturnable<Boolean> callback) {
-        if (target instanceof Mob defender && !FactionCombat.permitsAttack((Mob) (Object) this, defender)) {
+        Mob attacker = (Mob) (Object) this;
+        if (ProjectileAttack.usesConfiguredAttack(attacker)
+            || (target instanceof Mob defender && (FactionCombat.usesAttackGrid(attacker)
+                || !FactionCombat.permitsAttack(attacker, defender)))) {
             callback.setReturnValue(false);
+        }
+    }
+
+    @Inject(method = "getTarget", at = @At("RETURN"), cancellable = true)
+    private void layoutcamera$dropElevatedTarget(CallbackInfoReturnable<LivingEntity> callback) {
+        Mob attacker = (Mob) (Object) this;
+        if (callback.getReturnValue() != null && (ProjectileAttack.usesConfiguredAttack(attacker)
+            || (callback.getReturnValue() instanceof Mob defender && !FactionCombat.canAttackAtHeight(attacker, defender)))) {
+            callback.setReturnValue(null);
         }
     }
 
     @Inject(method = "doHurtTarget", at = @At("HEAD"), cancellable = true)
     private void layoutcamera$filterMeleeByZone(ServerLevel level, Entity target, CallbackInfoReturnable<Boolean> callback) {
-        if (target instanceof Mob defender && !FactionCombat.permitsAttack((Mob) (Object) this, defender)) {
+        Mob attacker = (Mob) (Object) this;
+        if (ProjectileAttack.usesConfiguredAttack(attacker)
+            || (target instanceof Mob defender && (FactionCombat.usesAttackGrid(attacker)
+                || !FactionCombat.permitsAttack(attacker, defender)))) {
             callback.setReturnValue(false);
         }
     }

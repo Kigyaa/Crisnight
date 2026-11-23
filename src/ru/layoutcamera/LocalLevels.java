@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -18,6 +19,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.phys.AABB;
@@ -76,7 +78,8 @@ final class LocalLevels {
                 throw new IllegalArgumentException("Повторяющийся ID или зона за границей уровня: " + zoneId);
             }
             ZoneSettings settings = ZoneSettings.read(color, item.getAsJsonObject("settings"));
-            zones.put(zoneId, new Zone(zoneId, area, color, settings));
+            var route = readRoute(item.getAsJsonArray("route"), bounds, area, color);
+            zones.put(zoneId, new Zone(zoneId, area, color, settings, route));
         }
         return new LayoutLevel(id, bounds, zones);
     }
@@ -91,10 +94,50 @@ final class LocalLevels {
             item.addProperty("type", zone.color().name().toLowerCase(Locale.ROOT));
             item.add("bounds", writeBounds(zone.bounds()));
             item.add("settings", zone.settings().json());
+            if (!zone.route().isEmpty()) {
+                JsonArray route = new JsonArray();
+                zone.route().forEach(point -> {
+                    JsonArray coordinates = new JsonArray();
+                    coordinates.add(point.getX());
+                    coordinates.add(point.getY());
+                    coordinates.add(point.getZ());
+                    route.add(coordinates);
+                });
+                item.add("route", route);
+            }
             zones.add(zone.id().toString(), item);
         });
         json.add("zones", zones);
         return json;
+    }
+
+    private static List<BlockPos> readRoute(JsonArray route, AABB bounds, AABB spawn, ZoneColor color) {
+        if (route == null) {
+            return List.of();
+        }
+        if (color != ZoneColor.RED || route.size() < 2 || route.size() > WaveRoute.MAX_EDIT_POINTS) {
+            throw new IllegalArgumentException("В route красной зоны нужно от 2 до " + WaveRoute.MAX_EDIT_POINTS
+                + " точек.");
+        }
+        List<BlockPos> points = new ArrayList<>();
+        for (var value : route) {
+            var coordinates = value.getAsJsonArray();
+            if (coordinates.size() != 3 || coordinates.asList().stream()
+                .anyMatch(number -> !number.isJsonPrimitive() || !number.getAsJsonPrimitive().isNumber())) {
+                throw new IllegalArgumentException("Точка route должна содержать три целые координаты.");
+            }
+            var point = new BlockPos(coordinates.get(0).getAsBigDecimal().intValueExact(),
+                coordinates.get(1).getAsBigDecimal().intValueExact(),
+                coordinates.get(2).getAsBigDecimal().intValueExact());
+            if (!WaveRoute.insideLevel(bounds, point) || (!points.isEmpty() && points.getLast().equals(point))) {
+                throw new IllegalArgumentException("Точка route выходит за границу уровня или повторяется подряд.");
+            }
+            points.add(point);
+        }
+        if (!WaveRoute.onZone(spawn, points.getFirst())) {
+            throw new IllegalArgumentException("Первая точка route должна находиться на красной зоне.");
+        }
+        return List.copyOf(points);
     }
 
     static void writeJson(Path path, JsonObject root) throws IOException {
@@ -184,7 +227,15 @@ final class LocalLevels {
         }
     }
 
-    record Zone(UUID id, AABB bounds, ZoneColor color, ZoneSettings settings) {}
+    record Zone(UUID id, AABB bounds, ZoneColor color, ZoneSettings settings, List<BlockPos> route) {
+        Zone {
+            route = List.copyOf(route);
+        }
+
+        Zone(UUID id, AABB bounds, ZoneColor color, ZoneSettings settings) {
+            this(id, bounds, color, settings, List.of());
+        }
+    }
 
     record ZoneSettings(boolean enabled, Set<Identifier> allowedMobs, SpawnZones.Config spawn, JsonObject json) {
         static ZoneSettings read(ZoneColor color, JsonObject json) {

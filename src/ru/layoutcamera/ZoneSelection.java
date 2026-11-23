@@ -23,6 +23,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.gizmos.GizmoStyle;
 import net.minecraft.gizmos.Gizmos;
 import net.minecraft.network.chat.ClickEvent;
@@ -46,6 +47,7 @@ import ru.layoutcamera.LocalLevels.ZoneSettings;
 
 public final class ZoneSelection {
     public static final String TOOL_NAME = "Выделитель зон";
+    public static final String ROUTE_TOOL_NAME = "Разметчик маршрута";
     private static final GizmoStyle LEVEL_BORDER = GizmoStyle.stroke(0xffd99cff, 2.0f);
     private static volatile Selection selection = empty(null);
     private static Path zoneFile;
@@ -54,17 +56,142 @@ public final class ZoneSelection {
     private static boolean levelsLoadFailed;
     private static String draftLevel;
     private static BlockPos draftCorner;
+    private static RouteDraft routeDraft;
+    private static List<Vec3> routePreview = List.of();
+    private static long previewUntil;
 
     private ZoneSelection() {}
 
     public static boolean isHoldingTool(Minecraft minecraft) {
+        return holdsNamedStick(minecraft, TOOL_NAME);
+    }
+
+    public static boolean isHoldingRouteTool(Minecraft minecraft) {
+        return minecraft.getSingleplayerServer() != null && holdsNamedStick(minecraft, ROUTE_TOOL_NAME);
+    }
+
+    private static boolean holdsNamedStick(Minecraft minecraft, String toolName) {
         if (minecraft.player == null || minecraft.player.isSpectator()) {
             return false;
         }
         var stack = minecraft.player.getMainHandItem();
         Component name = stack.get(DataComponents.CUSTOM_NAME);
-        return stack.getItem() == Items.STICK && name != null && TOOL_NAME.equals(name.getString());
+        return stack.getItem() == Items.STICK && name != null && toolName.equals(name.getString());
     }
+
+    public static synchronized void editRoute(Minecraft minecraft, boolean add) {
+        Selection current = forLevel(minecraft);
+        RouteDraft draft = routeDraft;
+        if (!add && draft != null) {
+            draft.points().removeLast();
+            if (draft.points().isEmpty()) {
+                routeDraft = null;
+            }
+            previewRoute(minecraft, draft.points());
+            tell(minecraft, "Маршрут · последняя точка убрана.");
+            return;
+        }
+        if (!(minecraft.hitResult instanceof BlockHitResult hit) || hit.getType() != HitResult.Type.BLOCK
+            || hit.getDirection() != Direction.UP) {
+            tell(minecraft, "Маршрут · наведи на верхнюю грань блока рядом со стыком 2×2.");
+            return;
+        }
+        BlockPos position = WaveRoute.snap(hit.getLocation(), hit.getBlockPos().getY() + 1);
+        LayoutLevel layout = draftAt(current, Vec3.atCenterOf(hit.getBlockPos()));
+        if (layout == null || !WaveRoute.insideLevel(layout.bounds(), position)) {
+            tell(minecraft, "Маршрут · выбери стык 2×2 внутри исходной области уровня.");
+            return;
+        }
+        LayoutLevel zones = includeLegacyZones(layout, current.zones());
+        if (draft == null) {
+            Zone spawn = zones.zones().values().stream().filter(zone -> zone.color() == ZoneColor.RED
+                && zone.settings().enabled() && WaveRoute.onZone(zone.bounds(), position)).findFirst().orElse(null);
+            if (spawn == null) {
+                tell(minecraft, "Маршрут · начни с середины красной зоны.");
+                return;
+            }
+            if (!add) {
+                previewRoute(minecraft, spawn.route());
+                tell(minecraft, spawn.route().isEmpty() ? "Маршрут · для зоны действует автоматический путь."
+                    : "Маршрут · показан сохранённый путь.");
+                return;
+            }
+            if (!WaveRoute.supported(minecraft.level, WaveRoute.center(position))) {
+                tell(minecraft, "Маршрут · в точке старта нужна свободная площадка 2×2.");
+                return;
+            }
+            routeDraft = new RouteDraft(layout.id(), spawn.id(), new ArrayList<>(List.of(position)));
+            previewRoute(minecraft, routeDraft.points());
+            tell(minecraft, "Маршрут · отметь повороты ЛКМ и закончи на белой зоне.");
+            return;
+        }
+        if (!layout.id().equals(draft.layout()) || !zones.zones().containsKey(draft.spawn())) {
+            tell(minecraft, "Маршрут · точки должны быть в исходной области того же уровня.");
+            return;
+        }
+        BlockPos previous = draft.points().getLast();
+        if (previous.equals(position) || !WaveRoute.supported(minecraft.level, WaveRoute.center(position))
+            || !WaveRoute.isSegmentWalkable(minecraft.level, previous, position)) {
+            tell(minecraft, "Маршрут · отрезок должен идти по свободному полу. Отметь поворот или ступень вниз.");
+            return;
+        }
+        boolean finish = zones.zones().values().stream().anyMatch(zone -> zone.color() == ZoneColor.WHITE
+            && zone.settings().enabled() && WaveRoute.onZone(zone.bounds(), position));
+        if (draft.points().size() >= WaveRoute.MAX_EDIT_POINTS - (finish ? 0 : 1)) {
+            tell(minecraft, "Маршрут · осталось место только для точки на белом финише.");
+            return;
+        }
+        draft.points().add(position);
+        if (finish) {
+            try {
+                saveRoute(current, layout, zones.zones().get(draft.spawn()), draft.points());
+                routeDraft = null;
+                tell(minecraft, "Маршрут сохранён · точек: " + draft.points().size() + ".");
+            } catch (IOException exception) {
+                draft.points().removeLast();
+                tell(minecraft, "Маршрут · " + exception.getMessage());
+            }
+        }
+        previewRoute(minecraft, draft.points());
+    }
+
+    private static void previewRoute(Minecraft minecraft, List<BlockPos> points) {
+        routePreview = RouteParticles.sample(points.stream().map(WaveRoute::center).toList());
+        previewUntil = minecraft.level.getGameTime() + 60;
+    }
+
+    public static void tickRoutePreview(Minecraft minecraft) {
+        if (minecraft.level == null || !isHoldingRouteTool(minecraft) || LayoutCamera.isActive(minecraft)
+            || minecraft.gui.screen() != null || minecraft.gui.overlay() != null) {
+            return;
+        }
+        long time = minecraft.level.getGameTime();
+        if ((routeDraft != null || time < previewUntil) && time % 10 == 0) {
+            routePreview.forEach(point -> minecraft.level.addParticle(ParticleTypes.END_ROD,
+                point.x, point.y, point.z, 0, 0, 0));
+        }
+    }
+
+    static synchronized void clearRoute(Minecraft minecraft, String name, String zoneId) throws IOException {
+        LayoutLevel layout = findLayout(name);
+        Zone spawn = layout.zones().get(UUID.fromString(zoneId));
+        if (spawn == null || spawn.color() != ZoneColor.RED || spawn.route().isEmpty()) {
+            throw new IllegalArgumentException("У этой красной зоны нет ручного маршрута.");
+        }
+        saveRoute(selection, layout, spawn, List.of());
+        routeDraft = null;
+        routePreview = List.of();
+        tell(minecraft, "Маршрут удалён. Для зоны будет построен автоматический путь.");
+    }
+
+    private static void saveRoute(Selection current, LayoutLevel layout, Zone spawn, List<BlockPos> points)
+        throws IOException {
+        Map<UUID, Zone> zones = new LinkedHashMap<>(layout.zones());
+        zones.put(spawn.id(), new Zone(spawn.id(), spawn.bounds(), spawn.color(), spawn.settings(), points));
+        updateLayout(current, layout, new LayoutLevel(layout.id(), layout.bounds(), zones));
+    }
+
+    private record RouteDraft(UUID layout, UUID spawn, List<BlockPos> points) {}
 
     public static synchronized void switchZone(Minecraft minecraft) {
         if (LayoutCamera.isActive(minecraft)) {
@@ -211,6 +338,13 @@ public final class ZoneSelection {
         return zone.color() == ZoneColor.RED || zone.color() == ZoneColor.WHITE;
     }
 
+    static void drawAttackGrid(AttackGrid grid, Vec3 center, float yaw) {
+        ClientLevel level = Minecraft.getInstance().level;
+        if (level != null) {
+            AttackGridOverlay.draw(level, grid, center, yaw);
+        }
+    }
+
     private static void drawCopyZones(Minecraft minecraft, List<Zone> zones, UUID scope) {
         ZoneColor allowed = PlanningDrag.placementColor();
         Identifier id = PlanningDrag.placementId();
@@ -254,8 +388,10 @@ public final class ZoneSelection {
             AABB search = new AABB(box.minX, box.minY, box.minZ, box.maxX, box.maxY + 2, box.maxZ);
             for (Mob mob : level.getEntitiesOfClass(Mob.class, search, candidate ->
                 candidate.isAlive() && LocalLevels.belongsTo(candidate, scope) && candidate.onGround()
+                    && !CampaignNpc.isNpc(candidate)
+                    && !FinishRouteGoal.hasWaypoints(candidate)
                     && box.contains(Vec3.atCenterOf(candidate.getOnPosLegacy())))) {
-                mob.discard();
+                SpawnZones.reachFinish(mob);
             }
         }
     }
@@ -446,6 +582,8 @@ public final class ZoneSelection {
     }
 
     public static synchronized void reset() {
+        routeDraft = null;
+        routePreview = List.of();
         selection = empty(null);
         zoneFile = null;
         loadFailed = false;
@@ -617,7 +755,7 @@ public final class ZoneSelection {
         }
         ZoneSettings settings = ZoneSettings.read(zone.color(), JsonParser.parseString(json).getAsJsonObject());
         Map<UUID, Zone> zones = new LinkedHashMap<>(layout.zones());
-        zones.put(id, new Zone(id, zone.bounds(), zone.color(), settings));
+        zones.put(id, new Zone(id, zone.bounds(), zone.color(), settings, zone.route()));
         updateLayout(current, layout, new LayoutLevel(layout.id(), layout.bounds(), zones));
         tell(minecraft, "Настройки зоны " + id + " сохранены.");
     }

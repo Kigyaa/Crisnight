@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.logging.LogUtils;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -73,6 +74,17 @@ public final class StagePlanning {
                 }
             });
             state.add("layout", geometry);
+            JsonObject routes = new JsonObject();
+            RouteParticles.snapshot(layout.id()).forEach((id, points) -> {
+                JsonArray coordinates = new JsonArray();
+                points.forEach(point -> {
+                    coordinates.add(point.x);
+                    coordinates.add(point.y);
+                    coordinates.add(point.z);
+                });
+                routes.add(id.toString(), coordinates);
+            });
+            state.add("routes", routes);
             JsonArray mobs = new JsonArray();
             for (var mob : PlanningMobs.defenderPlacements(player.level(), layout.id())) {
                 JsonObject item = new JsonObject();
@@ -125,11 +137,12 @@ public final class StagePlanning {
                         Identifier.parse("minecraft:clay_ball"), json));
                 });
             }
+            var routes = layout == null ? Map.<UUID, List<Vec3>>of() : readRoutes(state.getAsJsonObject("routes"));
             if (remote != null) {
                 PlanningMobs.removeStage(remote.layout.id());
             }
             remote = layout == null ? null : new Remote(connection, state.get("dimension").getAsString(),
-                layout, Map.copyOf(definitions));
+                layout, Map.copyOf(definitions), routes);
             if (layout != null) {
                 PlanningMobs.addStage(layout.id(), placements, Vec3.ZERO);
             }
@@ -149,6 +162,36 @@ public final class StagePlanning {
 
     static Map<Identifier, PetConfig> clientPets(Minecraft minecraft) {
         return clientLayout(minecraft) == null ? null : remote.definitions;
+    }
+
+    static Map<UUID, List<Vec3>> clientRoutes(Minecraft minecraft) {
+        return clientLayout(minecraft) == null ? Map.of() : remote.routes;
+    }
+
+    private static Map<UUID, List<Vec3>> readRoutes(JsonObject json) {
+        if (json == null) {
+            return Map.of();
+        }
+        Map<UUID, List<Vec3>> routes = new LinkedHashMap<>();
+        int remaining = RouteParticles.MAX_STAGE_PARTICLES;
+        for (var entry : json.entrySet()) {
+            var coordinates = entry.getValue().getAsJsonArray();
+            if (coordinates.size() % 3 != 0 || coordinates.size() / 3 > remaining) {
+                throw new IllegalArgumentException("Некорректная длина маршрута.");
+            }
+            List<Vec3> points = new ArrayList<>();
+            for (int i = 0; i < coordinates.size(); i += 3) {
+                Vec3 point = new Vec3(coordinates.get(i).getAsDouble(), coordinates.get(i + 1).getAsDouble(),
+                    coordinates.get(i + 2).getAsDouble());
+                if (!Double.isFinite(point.x) || !Double.isFinite(point.y) || !Double.isFinite(point.z)) {
+                    throw new IllegalArgumentException("Некорректная точка маршрута.");
+                }
+                points.add(point);
+            }
+            remaining -= points.size();
+            routes.put(UUID.fromString(entry.getKey()), List.copyOf(points));
+        }
+        return Map.copyOf(routes);
     }
 
     static boolean edit(Minecraft minecraft, UUID scope, Vec3 center, float yaw, int slot) {
@@ -200,5 +243,5 @@ public final class StagePlanning {
     }
 
     private record Remote(ClientPacketListener connection, String dimension, LayoutLevel layout,
-                          Map<Identifier, PetConfig> definitions) {}
+                          Map<Identifier, PetConfig> definitions, Map<UUID, List<Vec3>> routes) {}
 }

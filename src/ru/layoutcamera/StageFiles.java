@@ -74,13 +74,21 @@ final class StageFiles {
         }
         Map<UUID, Zone> zones = new LinkedHashMap<>(saved.zones());
         for (Zone zone : relative.zones().values()) {
-            if (!zones.containsKey(zone.id()) && zones.values().stream()
-                .noneMatch(existing -> existing.color() == zone.color() && existing.bounds().equals(zone.bounds()))) {
+            Zone previous = zones.get(zone.id());
+            if (previous == null) {
+                previous = zones.values().stream().filter(existing ->
+                    existing.color() == zone.color() && existing.bounds().equals(zone.bounds())).findFirst().orElse(null);
+            }
+            if (previous == null) {
                 zones.put(zone.id(), zone);
+            } else if (previous.color() == ZoneColor.RED && previous.bounds().equals(zone.bounds())
+                && !previous.route().equals(zone.route())) {
+                zones.put(previous.id(), new Zone(previous.id(), previous.bounds(), previous.color(),
+                    previous.settings(), zone.route()));
             }
         }
         List<Placement> updatedPlacements = relativePlacements(draft, placements);
-        return zones.size() == saved.zones().size() && updatedPlacements.equals(snapshot.placements()) ? snapshot
+        return zones.equals(saved.zones()) && updatedPlacements.equals(snapshot.placements()) ? snapshot
             : new Snapshot(new LayoutLevel(saved.id(), saved.bounds(), zones), snapshot.palette(), snapshot.blocks(),
                 updatedPlacements);
     }
@@ -217,8 +225,10 @@ final class StageFiles {
 
     static LayoutLevel translate(LayoutLevel layout, Vec3 offset, UUID id) {
         Map<UUID, Zone> zones = new LinkedHashMap<>();
+        BlockPos blocks = BlockPos.containing(offset);
         layout.zones().forEach((zoneId, zone) -> zones.put(zoneId,
-            new Zone(zoneId, zone.bounds().move(offset), zone.color(), zone.settings())));
+            new Zone(zoneId, zone.bounds().move(offset), zone.color(), zone.settings(),
+                zone.route().stream().map(point -> point.offset(blocks)).toList())));
         return new LayoutLevel(id, layout.bounds().move(offset), zones);
     }
 

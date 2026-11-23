@@ -37,6 +37,7 @@ import ru.layoutcamera.LocalLevels.LayoutLevel;
 public final class StageCopies {
     private static final String TEMPORARY_MOB = "layoutcamera_temporary_stage_mob";
     private static final int CLEANUP_TICKS = 10 * 20;
+    private static final int VICTORY_TICKS = 3 * 20;
     private static final int COPY_DISTANCE = 1000;
     private static final int BLOCK_FLAGS = Block.UPDATE_CLIENTS | Block.UPDATE_SKIP_ALL_SIDEEFFECTS;
     private static final Map<Owner, Copy> active = new ConcurrentHashMap<>();
@@ -45,10 +46,23 @@ public final class StageCopies {
     private StageCopies() {}
 
     static int create(CommandSourceStack source, String name) {
+        return create(source, name, null);
+    }
+
+    static int create(CommandSourceStack source, String name, Campaign.LevelEntry campaign) {
+        return create(source, name, campaign, null);
+    }
+
+    private static int create(CommandSourceStack source, String name, Campaign.LevelEntry campaign, Copy restart) {
         ServerPlayer player = source.getPlayer();
-        ServerLevel level = player.level();
-        Owner owner = new Owner(level.getServer(), player.getUUID());
+        MinecraftServer server = player.level().getServer();
+        Owner owner = new Owner(server, player.getUUID());
         try {
+            ServerLevel level = restart == null ? player.level() : server.getLevel(restart.location.returnDimension());
+            if (level == null) {
+                throw new IOException("Исходное измерение игрока недоступно.");
+            }
+            BlockPos near = restart == null ? player.blockPosition() : BlockPos.containing(restart.location.returnPosition());
             Path folder = StageFiles.directory(name);
             Path file = folder.resolve("stage.nbt");
             boolean firstUse = Files.notExists(file);
@@ -75,20 +89,24 @@ public final class StageCopies {
             for (ServerLevel dimension : level.getServer().getAllLevels()) {
                 recoverReady(dimension);
             }
-            AABB bounds = findSpace(level, snapshot.layout().bounds(), player.blockPosition(), owner);
+            AABB bounds = findSpace(level, snapshot.layout().bounds(), near, owner);
             if (bounds == null) {
                 throw new IllegalArgumentException("Наверху нет свободного места с необходимым расстоянием между копиями.");
             }
+            Vec3 origin = new Vec3(bounds.minX, bounds.minY, bounds.minZ);
+            LayoutLevel layout = StageFiles.translate(snapshot.layout(), origin, UUID.randomUUID());
+            var wave = campaign == null ? null : SpawnZones.prepareCampaign(level, layout);
             Copy previous = active.get(owner);
             if (previous != null) {
                 remove(previous, player);
             }
-            Vec3 origin = new Vec3(bounds.minX, bounds.minY, bounds.minZ);
-            LayoutLevel layout = StageFiles.translate(snapshot.layout(), origin, UUID.randomUUID());
-            Location location = new Location(layout.bounds(), player.getUUID(), player.level().dimension(),
-                player.position());
+            Location location = restart == null
+                ? new Location(layout.bounds(), player.getUUID(), player.level().dimension(), player.position())
+                : new Location(layout.bounds(), player.getUUID(), restart.location.returnDimension(),
+                    restart.location.returnPosition());
             Path journal = journal(level, owner.player());
             StageFiles.writeNbt(journal, location.encode());
+            boolean teleported = false;
             try {
                 paste(level, bounds, snapshot);
                 BlockPos landing = findLanding(level, bounds);
@@ -99,11 +117,21 @@ public final class StageCopies {
                     StageFiles.save(folder, snapshot);
                 }
                 teleport(player, level, Vec3.atBottomCenterOf(landing));
+                teleported = true;
                 PlanningMobs.addStage(layout.id(), snapshot.placements(), origin);
                 active.put(owner, new Copy(level, name, snapshot.layout().id(), layout, location, journal));
+                if (campaign != null) {
+                    SpawnZones.startCampaign(level, player, campaign, wave);
+                }
+                SpawnZones.showStageRoutes(level, layout, wave);
             } catch (IOException | RuntimeException exception) {
+                active.remove(owner);
+                SpawnZones.cancel(level, layout.id());
                 PlanningMobs.removeStage(layout.id());
                 try {
+                    if (teleported) {
+                        returnPlayer(level.getServer(), location, player);
+                    }
                     erase(level, location, journal);
                 } catch (IOException | RuntimeException cleanupFailure) {
                     exception.addSuppressed(cleanupFailure);
@@ -118,6 +146,41 @@ public final class StageCopies {
             LogUtils.getLogger().warn("Could not create stage {}", name, exception);
             source.sendFailure(Component.literal("Уровень " + name + " · " + exception.getMessage()));
             return 0;
+        }
+    }
+
+    static void recordResult(ServerPlayer player, Campaign.Result result) {
+        Copy copy = active.get(new Owner(player.level().getServer(), player.getUUID()));
+        if (copy != null && copy.layout.id().equals(result.scope()) && copy.result == null) {
+            copy.result = result;
+            copy.returnTicks = VICTORY_TICKS;
+            Campaign.showResult(player, result);
+        }
+    }
+
+    static boolean hasCampaignResult(ServerPlayer player, UUID scope) {
+        Copy copy = active.get(new Owner(player.level().getServer(), player.getUUID()));
+        return copy != null && copy.layout.id().equals(scope) && copy.result != null;
+    }
+
+    static boolean actOnDefeat(ServerPlayer player, Campaign.Result result, boolean restart) {
+        Copy copy = active.get(new Owner(player.level().getServer(), player.getUUID()));
+        if (copy == null || copy.result != result) {
+            return true;
+        }
+        if (result.victory()) {
+            return false;
+        }
+        if (restart) {
+            return create(player.createCommandSourceStack(), copy.name, result.entry(), copy) != 0;
+        }
+        try {
+            remove(copy, player);
+            return true;
+        } catch (IOException | RuntimeException exception) {
+            LogUtils.getLogger().warn("Could not leave stage {}", copy.name, exception);
+            player.sendSystemMessage(Component.literal("Не удалось выйти с уровня · " + exception.getMessage()));
+            return false;
         }
     }
 
@@ -213,6 +276,22 @@ public final class StageCopies {
         if (owner == null) {
             return;
         }
+        if (copy.result != null && !owner.isAlive()) {
+            copy.retired = true;
+            copy.remainingTicks = 0;
+            return;
+        }
+        if (copy.result != null && !copy.retired) {
+            if (copy.result.victory() && --copy.returnTicks <= 0) {
+                try {
+                    remove(copy, owner);
+                } catch (IOException | RuntimeException exception) {
+                    copy.returnTicks = VICTORY_TICKS;
+                    LogUtils.getLogger().warn("Could not return player after winning stage {}", copy.name, exception);
+                }
+            }
+            return;
+        }
         if (!copy.retired && owner.level() == level && LocalLevels.isNear(copy.layout.bounds(), owner.position(), 20)) {
             copy.remainingTicks = -1;
             return;
@@ -239,6 +318,7 @@ public final class StageCopies {
         for (Copy copy : active.values()) {
             if (copy.level == level) {
                 active.remove(new Owner(level.getServer(), copy.location.owner()), copy);
+                RouteParticles.clear(copy.layout.id());
                 PlanningMobs.removeStage(copy.layout.id());
             }
         }
@@ -434,6 +514,9 @@ public final class StageCopies {
         active.remove(new Owner(level.getServer(), copy.location.owner()), copy);
         PlanningMobs.removeStage(copy.layout.id());
         StagePlanning.send(owner, null);
+        if (owner != null && copy.result != null) {
+            Campaign.closeResult(owner, copy.result);
+        }
     }
 
     private static void returnPlayer(MinecraftServer server, Location location, ServerPlayer owner) throws IOException {
@@ -506,6 +589,8 @@ public final class StageCopies {
         private final Path journal;
         private int remainingTicks = -1;
         private boolean retired;
+        private int returnTicks;
+        private Campaign.Result result;
 
         Copy(ServerLevel level, String name, UUID sourceId, LayoutLevel layout, Location location, Path journal) {
             this.level = level;
